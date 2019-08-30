@@ -56,7 +56,9 @@ func main() {
 	// wait for the 1 go routine to end
 	wg.Add(1)
 
-	// start separate go routine to handle data dowwnload 
+	time.Sleep(100 * time.Millisecond)
+
+	// start separate go routine to handle data download 
 	go func() {
 
 		var (
@@ -87,6 +89,8 @@ func main() {
 	// <-done
 	// wait 
 	wg.Wait()
+	// time.Sleep(300000 * time.Millisecond)
+
 }
 
 // Check for error, log and exit if err

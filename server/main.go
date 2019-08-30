@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"io"
+	"sync"
 
 	"google.golang.org/grpc"
 	pb "fl-server/server/genproto"
@@ -17,8 +18,13 @@ const (
 	chunkSize = 64 * 1024
 )
 
+
 // server struct to implement gRPC Round service interface 
-type server struct {}
+type server struct {
+	numCheckIns int
+	numUpdates int
+	mu  sync.Mutex
+}
 
 
 func main() {
@@ -28,7 +34,7 @@ func main() {
 
 	// register FL round server
 	srv := grpc.NewServer()
-	pb.RegisterFlRoundServer(srv, &server {})
+	pb.RegisterFlRoundServer(srv, &server {numCheckIns: 0})
 
 	// start serving
 	err = srv.Serve(lis)
@@ -45,43 +51,49 @@ func (s *server) CheckIn(stream pb.FlRound_CheckInServer) error {
 		n		int
 		file	*os.File
 	)
+	
+	// receive check-in request
+	checkinReq, err := stream.Recv()
+	log.Println("Client Name: ", checkinReq.Message)
+
+	// prevent inconsistency
+	s.mu.Lock()
+	s.numCheckIns++
+	s.mu.Unlock()
+	log.Println("Count: ", s.numCheckIns)
+	
+	// open file
+	file, err = os.Open(filePath)
+	check(err, "Could not open new file")
+	defer file.Close()
+
+	// make a buffer of a defined chunk size
+	buf  = make([]byte, chunkSize)
 
 	for {
-		// receive check-in request
-		checkinReq, err := stream.Recv()
-		log.Println("Client Name: ", checkinReq.Message)
-
-		// open file
-		file, err = os.Open(filePath)
-		check(err, "Could not open new file")
-		defer file.Close()
-
-		// make a buffer of a defined chunk size
-		buf = make([]byte, chunkSize)
-
-		for {
-			// read the content (by using chunks)
-			n, err = file.Read(buf)
-			if err == io.EOF {
-				return nil
-			}
-			check(err, "Could not read file content")
-
-			// send the FL Data (file chunk + type: FL checkpoint) 
-			err = stream.Send(&pb.FlData{
-				Message: &pb.Chunk{
-					Content: buf[:n],
-				},
-				Type: pb.Type_FL_CHECKPOINT,
-			})
+		// read the content (by using chunks)
+		n, err = file.Read(buf)
+		if err == io.EOF {
+			return nil
 		}
+		check(err, "Could not read file content")
 
+		// send the FL Data (file chunk + type: FL checkpoint) 
+		err = stream.Send(&pb.FlData{
+			Message: &pb.Chunk{
+				Content: buf[:n],
+			},
+			Type: pb.Type_FL_CHECKPOINT,
+		})
 	}
+
 }
 
 // Update rpc
 // Accumulate FL checkpoint update sent by client  
 func (s *server) Update(stream pb.FlRound_UpdateServer) error {
+
+
 	return nil
 }
 

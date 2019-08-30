@@ -1,0 +1,7 @@
+FROM golang
+
+ENV PROJECT fl-server/test-client
+ADD . /go/src/$PROJECT
+RUN go install $PROJECT
+
+ENTRYPOINT /go/bin/test-client 

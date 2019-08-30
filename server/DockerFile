@@ -1,0 +1,9 @@
+FROM golang
+
+ENV PROJECT fl-server/server
+ADD . /go/src/$PROJECT
+RUN go install $PROJECT
+
+ENTRYPOINT /go/bin/server
+
+EXPOSE 50051

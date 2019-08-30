@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+// Client CheckIn Ping 
+// Currently, only a string message
+message CheckInRequest {
+	string message = 1;
+}
+
+// Chunk of bytes
+message Chunk {
+	bytes content = 1;
+}
+
+// Type of Fl Data
+enum Type {
+	FL_CHECKPOINT = 0;
+	FL_CHECKPOINT_UPDATE = 1;
+	FL_RECONN_TIME = 2;
+}
+
+// FL Data: For communication between client and server
+message FlData {
+	Chunk message = 1;
+	Type type = 2;
+}
+
+// Servive for a FL Round
+service FlRound {
+	rpc CheckIn(stream CheckInRequest) returns (stream FlData) {}
+	rpc Update(stream FlData) returns (FlData) {}
+}

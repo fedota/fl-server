@@ -21,7 +21,8 @@ enum Type {
 // FL Data: For communication between client and server
 message FlData {
 	Chunk message = 1;
-	Type type = 2;
+	int64 time =  2;
+	Type type = 3;
 }
 
 // Servive for a FL Round

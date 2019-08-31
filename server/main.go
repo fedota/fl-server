@@ -6,6 +6,7 @@ import (
 	"os"
 	"io"
 	"sync"
+	"strconv"
 
 	"google.golang.org/grpc"
 	pb "fl-server/server/genproto"
@@ -14,8 +15,10 @@ import (
 // constants
 const (
 	port = ":50051"
-	filePath = "./data/fl_checkpoint"
+	checkpointFilePath = "./data/fl_checkpoint"
+	updatedCheckpointPath = "./data/fl_checkpoint_update_"
 	chunkSize = 64 * 1024
+	reconnectionTime = 8000
 )
 
 
@@ -38,7 +41,7 @@ func main() {
 
 	// start serving
 	err = srv.Serve(lis)
-	check(err, "Failed to listen on port" + port)
+	check(err, "Failed to serve on port" + port)
 }
 
 // Check In rpc
@@ -63,8 +66,8 @@ func (s *server) CheckIn(stream pb.FlRound_CheckInServer) error {
 	log.Println("Count: ", s.numCheckIns)
 	
 	// open file
-	file, err = os.Open(filePath)
-	check(err, "Could not open new file")
+	file, err = os.Open(checkpointFilePath)
+	check(err, "Could not open checkpoint file")
 	defer file.Close()
 
 	// make a buffer of a defined chunk size
@@ -78,7 +81,7 @@ func (s *server) CheckIn(stream pb.FlRound_CheckInServer) error {
 		}
 		check(err, "Could not read file content")
 
-		// send the FL Data (file chunk + type: FL checkpoint) 
+		// send the FL checkpoint Data (file chunk + type: FL checkpoint) 
 		err = stream.Send(&pb.FlData{
 			Message: &pb.Chunk{
 				Content: buf[:n],
@@ -93,8 +96,34 @@ func (s *server) CheckIn(stream pb.FlRound_CheckInServer) error {
 // Accumulate FL checkpoint update sent by client  
 func (s *server) Update(stream pb.FlRound_UpdateServer) error {
 
+	// count number of operation
+	s.mu.Lock()
+	s.numUpdates++
+	index := s.numUpdates
+	s.mu.Unlock()
 
-	return nil
+	// open the file
+	// log.Println(updatedCheckpointPath + strconv.Itoa(index))
+	file, err := os.OpenFile(updatedCheckpointPath + strconv.Itoa(index), os.O_CREATE, 0644)
+	check(err, "Could not open new checkpoint file")
+	defer file.Close()
+
+	for {
+		// receive Fl data
+		flData, err := stream.Recv()
+		// exit after data transfer completee
+		if err == io.EOF {
+			return stream.SendAndClose(&pb.FlData{
+				Time: reconnectionTime,
+				Type: pb.Type_FL_RECONN_TIME,
+			})
+		}
+		check(err, "Unable to receive update data from client")
+		
+		// write data to file
+		_, err = file.Write(flData.Message.Content)
+		check(err, "Unable to write into new checkpoint file")
+	}
 }
 
 

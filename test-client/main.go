@@ -18,6 +18,8 @@ const (
 	address = "localhost:50051"
 	filePath = "./data/fl_checkpoint"
 	defaultName = "Me"
+	chunkSize = 64 * 1024
+
 )
 
 func main() {
@@ -39,6 +41,9 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	
+	// get data 
+	// ====================================================================================================
+	
 	// check-in with FL server
 	stream, err := client.CheckIn(ctx)
 	check(err, "Cannot open stream")
@@ -56,7 +61,7 @@ func main() {
 	// wait for the 1 go routine to end
 	wg.Add(1)
 
-	time.Sleep(100 * time.Millisecond)
+	// time.Sleep(100 * time.Millisecond)
 
 	// start separate go routine to handle data download 
 	go func() {
@@ -67,7 +72,7 @@ func main() {
 		
 		// open the file
 		file, err = os.OpenFile(filePath, os.O_CREATE, 0644)
-		check(err, "Could not open new file")
+		check(err, "Could not open new checkpoint file")
 		defer file.Close()
 
 		for {
@@ -91,6 +96,39 @@ func main() {
 	wg.Wait()
 	// time.Sleep(300000 * time.Millisecond)
 
+	// send data back
+	// ====================================================================================================
+	// check-in with FL server
+	
+	updateStream, err := client.Update(ctx)
+	check(err, "Cannot open stream")
+
+	file, err := os.Open(filePath)
+	check(err, "Could not open checkpoint file")
+	defer file.Close()
+
+	// make a buffer of a defined chunk size
+	buf  := make([]byte, chunkSize)
+
+	for {
+		// read the content (by using chunks)
+		n, err := file.Read(buf)
+		if err == io.EOF {
+			break 
+		}
+		check(err, "Could not read checkpoint file content")
+
+		// send the FL checkpoint update Data (file chunk + type: FL checkpoint update) 
+		err = updateStream.Send(&pb.FlData{
+			Message: &pb.Chunk{
+				Content: buf[:n],
+			},
+			Type: pb.Type_FL_CHECKPOINT_UPDATE,
+		})
+	}
+
+	res, err := updateStream.CloseAndRecv()
+	log.Println("Reconnection time: ", res.Time)
 }
 
 // Check for error, log and exit if err

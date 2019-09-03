@@ -17,20 +17,25 @@ import (
 // constants
 const (
 	port = ":50051"
+	modelFilePath = "./model/model.h5"
 	checkpointFilePath = "./data/fl_checkpoint"
 	updatedCheckpointPath = "./data/fl_checkpoint_update_"
 	chunkSize = 64 * 1024
 	reconnectionTime = 8000
-	estimatedRoundTime = 1000
+	estimatedRoundTime = 8000
 )
 
+type flRoundClientResult struct {
+	checkpointWeight int64
+	checkpointFilePath string
+}
 
 // server struct to implement gRPC Round service interface 
 type server struct {
 	numCheckIns int
 	numUpdates int
 	mu  sync.Mutex
-	checkpointUpdates map[int]int64
+	checkpointUpdates map[int]flRoundClientResult
 }
 
 
@@ -42,14 +47,15 @@ func main() {
 	// register FL round server
 	srv := grpc.NewServer()
 	// impl instance
-	flServer := &server {numCheckIns: 0, checkpointUpdates: make(map[int]int64)}
+	flServer := &server {numCheckIns: 0, checkpointUpdates: make(map[int]flRoundClientResult)}
 	pb.RegisterFlRoundServer(srv, flServer)
+
+	go flServer.EventLoop()
 
 	// start serving
 	err = srv.Serve(lis)
 	check(err, "Failed to serve on port" + port)
 
-	// go flServer.EventLoop()
 }
 
 // Check In rpc
@@ -116,7 +122,8 @@ func (s *server) Update(stream pb.FlRound_UpdateServer) error {
 
 	// open the file
 	// log.Println(updatedCheckpointPath + strconv.Itoa(index))
-	file, err := os.OpenFile(updatedCheckpointPath + strconv.Itoa(index), os.O_CREATE, 0644)
+	filePath := updatedCheckpointPath + strconv.Itoa(index)
+	file, err := os.OpenFile(filePath, os.O_CREATE, os.ModeAppend)
 	check(err, "Could not open new checkpoint file")
 	defer file.Close()
 
@@ -140,7 +147,10 @@ func (s *server) Update(stream pb.FlRound_UpdateServer) error {
 			// put in array
 			// TODO: modify by making a go-routine to do updates
 			s.mu.Lock()
-			s.checkpointUpdates[index] = flData.IntVal
+			s.checkpointUpdates[index] = flRoundClientResult{
+				checkpointWeight: flData.IntVal,
+				checkpointFilePath: filePath,
+			}
 			s.mu.Unlock()
 			log.Println("Checkpoint Update: ", s.checkpointUpdates[index])
 		}
@@ -150,22 +160,36 @@ func (s *server) Update(stream pb.FlRound_UpdateServer) error {
 func (s *server) EventLoop() {
 	// TODO: change this naive way
 	// Wait for an estimated time for round 
+	log.Println("Event Loop in sleep")
 	time.Sleep(estimatedRoundTime * time.Millisecond)
+	log.Println("Event loop out of sleep")
 
-	// if s.numUpdates == come fixed amount or s.numCheckIns
-	s.FederatedAveraging()
+	// or compare with some base number
+	// TODO: change else condition
+	if s.numUpdates == s.numCheckIns && s.numUpdates > 0 {
+		// assumed no more updates and check-ins
+		s.FederatedAveraging()
+	} else {
+		log.Fatalf("Could not complete round")
+	} 
 }
 
 // launch the fede
 func (s *server) FederatedAveraging() {
-	// file paths and model path
-	err := exec.Command("federated_averaging.py", "./data/fl_checkpoint", "./data", "").Run()
+	// determine arguments
+	args := ""
+	for _, v := range s.checkpointUpdates {
+		args += strconv.FormatInt(v.checkpointWeight, 10) + " " + v.checkpointFilePath + " "
+	}
+	// log.Println("Arguments: ", args)
+	// model path
+	err := exec.Command("python ./federated_averaging.py", "--cf" + checkpointFilePath, "--mf" + modelFilePath, "--u" + args).Run()
 	check(err, "Unable to run federated averaging")
 }
 
 // Check for error, log and exit if err
 func check(err error, errorMsg string) {
 	if err != nil {
-		log.Fatalf(errorMsg, " ==> ", err)
+		log.Fatalf(errorMsg + " ==> ", err)
 	}
 }

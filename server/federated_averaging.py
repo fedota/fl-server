@@ -1,3 +1,9 @@
+from __future__ import absolute_import, division, print_function, unicode_literals
+
+import argparse
+import tensorflow as tf
+import numpy as np
+import keras
 from keras.models import load_model
 
 def federated_averaging(updates, model_path, ckpt_path):
@@ -70,3 +76,39 @@ def federated_averaging(updates, model_path, ckpt_path):
     
     # Save updated model checkpoints
     model.save_weights(ckpt_path)
+
+def main():
+	# define Arguments
+	parser = argparse.ArgumentParser(description='Perform Federated Averaging')
+	parser.add_argument("--cf", "--ckpt-file-path", required=True, nargs=1)
+	parser.add_argument("--mf", "--model-file-path", required=True, nargs=1)
+	parser.add_argument("--u", "--updates", required=True, nargs='*')
+
+	# params for federated averaging
+	model_path = ''
+	ckpt_path = ''
+	updates = []
+
+	# parse arguments
+	args = parser.parse_args()
+	for arg in vars(args):
+		print(arg, getattr(args, arg))
+		if (arg == "mf"):
+			model_path = getattr(args, arg)
+		elif (arg == "cf"):
+			ckpt_path = getattr(args, arg)
+		else:
+			update_args = getattr(args, arg)
+			print(update_args)
+			for i in range(len(update_args), 2):
+				print(update_args[i])
+				print(update_args[i + 1])
+				n = int(update_args[i])
+				path = update_args[i + 1]
+				updates.append((n, path))
+	
+	# run federated averaging
+	federated_averaging(updates, model_path, ckpt_path)
+
+if __name__ == "__main__":
+    main()

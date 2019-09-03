@@ -7,6 +7,7 @@ import (
 	"io"
 	"time"
 	"sync"
+	"math/rand"
 
 	"google.golang.org/grpc"
 	pb "fl-server/test-client/genproto"
@@ -38,7 +39,8 @@ func main() {
 	client := pb.NewFlRoundClient(conn)
 	
 	// get context
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	// use Minute as timeout period as server may take time to decide 
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	
 	// get data 
@@ -105,7 +107,6 @@ func main() {
 
 	file, err := os.Open(filePath)
 	check(err, "Could not open checkpoint file")
-	defer file.Close()
 
 	// make a buffer of a defined chunk size
 	buf  := make([]byte, chunkSize)
@@ -114,7 +115,8 @@ func main() {
 		// read the content (by using chunks)
 		n, err := file.Read(buf)
 		if err == io.EOF {
-			break 
+			file.Close()
+			break
 		}
 		check(err, "Could not read checkpoint file content")
 
@@ -127,8 +129,19 @@ func main() {
 		})
 	}
 
+	// send weight
+	n := int64(rand.Intn(100))
+	err = updateStream.Send(&pb.FlData{
+		IntVal: n,
+		Type: pb.Type_FL_CHECKPOINT_WEIGHT,
+	})
+
 	res, err := updateStream.CloseAndRecv()
-	log.Println("Reconnection time: ", res.Time)
+	log.Println("Reconnection time: ", res.IntVal)
+
+	// delete after sending update
+	err = os.Remove(filePath)
+	check(err, "Unable to delete the file")
 }
 
 // Check for error, log and exit if err

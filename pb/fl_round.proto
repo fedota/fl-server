@@ -16,12 +16,13 @@ enum Type {
 	FL_CHECKPOINT = 0;
 	FL_CHECKPOINT_UPDATE = 1;
 	FL_RECONN_TIME = 2;
+	FL_CHECKPOINT_WEIGHT = 3; 
 }
 
 // FL Data: For communication between client and server
 message FlData {
 	Chunk message = 1;
-	int64 time =  2;
+	int64 intVal =  2;
 	Type type = 3;
 }
 

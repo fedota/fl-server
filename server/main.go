@@ -7,6 +7,8 @@ import (
 	"io"
 	"sync"
 	"strconv"
+	"time"
+	"os/exec"
 
 	"google.golang.org/grpc"
 	pb "fl-server/server/genproto"
@@ -19,6 +21,7 @@ const (
 	updatedCheckpointPath = "./data/fl_checkpoint_update_"
 	chunkSize = 64 * 1024
 	reconnectionTime = 8000
+	estimatedRoundTime = 1000
 )
 
 
@@ -27,6 +30,7 @@ type server struct {
 	numCheckIns int
 	numUpdates int
 	mu  sync.Mutex
+	checkpointUpdates map[int]int64
 }
 
 
@@ -37,11 +41,15 @@ func main() {
 
 	// register FL round server
 	srv := grpc.NewServer()
-	pb.RegisterFlRoundServer(srv, &server {numCheckIns: 0})
+	// impl instance
+	flServer := &server {numCheckIns: 0, checkpointUpdates: make(map[int]int64)}
+	pb.RegisterFlRoundServer(srv, flServer)
 
 	// start serving
 	err = srv.Serve(lis)
 	check(err, "Failed to serve on port" + port)
+
+	// go flServer.EventLoop()
 }
 
 // Check In rpc
@@ -60,6 +68,7 @@ func (s *server) CheckIn(stream pb.FlRound_CheckInServer) error {
 	log.Println("Client Name: ", checkinReq.Message)
 
 	// prevent inconsistency
+	// as each rpc is executed as a separate go routine
 	s.mu.Lock()
 	s.numCheckIns++
 	s.mu.Unlock()
@@ -93,10 +102,13 @@ func (s *server) CheckIn(stream pb.FlRound_CheckInServer) error {
 }
 
 // Update rpc
-// Accumulate FL checkpoint update sent by client  
+// Accumulate FL checkpoint update sent by client
+// TODO: delete file when error
 func (s *server) Update(stream pb.FlRound_UpdateServer) error {
 
 	// count number of operation
+	// as each rpc is executed as a separate go routine
+	// TODO: make go routine to handle count updates
 	s.mu.Lock()
 	s.numUpdates++
 	index := s.numUpdates
@@ -114,18 +126,42 @@ func (s *server) Update(stream pb.FlRound_UpdateServer) error {
 		// exit after data transfer completee
 		if err == io.EOF {
 			return stream.SendAndClose(&pb.FlData{
-				Time: reconnectionTime,
+				IntVal: reconnectionTime,
 				Type: pb.Type_FL_RECONN_TIME,
 			})
 		}
 		check(err, "Unable to receive update data from client")
 		
-		// write data to file
-		_, err = file.Write(flData.Message.Content)
-		check(err, "Unable to write into new checkpoint file")
+		if flData.Type == pb.Type_FL_CHECKPOINT_UPDATE {
+			// write data to file
+			_, err = file.Write(flData.Message.Content)
+			check(err, "Unable to write into new checkpoint file")
+		} else if flData.Type == pb.Type_FL_CHECKPOINT_WEIGHT {
+			// put in array
+			// TODO: modify by making a go-routine to do updates
+			s.mu.Lock()
+			s.checkpointUpdates[index] = flData.IntVal
+			s.mu.Unlock()
+			log.Println("Checkpoint Update: ", s.checkpointUpdates[index])
+		}
 	}
 }
 
+func (s *server) EventLoop() {
+	// TODO: change this naive way
+	// Wait for an estimated time for round 
+	time.Sleep(estimatedRoundTime * time.Millisecond)
+
+	// if s.numUpdates == come fixed amount or s.numCheckIns
+	s.FederatedAveraging()
+}
+
+// launch the fede
+func (s *server) FederatedAveraging() {
+	// file paths and model path
+	err := exec.Command("federated_averaging.py", "./data/fl_checkpoint", "./data", "").Run()
+	check(err, "Unable to run federated averaging")
+}
 
 // Check for error, log and exit if err
 func check(err error, errorMsg string) {

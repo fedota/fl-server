@@ -1,1 +1,4 @@
-/*/data/*
+server/data/
+server/model/
+server/genproto/
+server/device*

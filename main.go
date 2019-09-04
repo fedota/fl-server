@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	pb "fl-server/server/genproto"
+	pb "federated-learning/fl-server/genproto/fl_round"
 
 	"google.golang.org/grpc"
 )
@@ -123,7 +123,7 @@ func (s *server) Update(stream pb.FlRound_UpdateServer) error {
 	// open the file
 	// log.Println(updatedCheckpointPath + strconv.Itoa(index))
 	filePath := updatedCheckpointPath + strconv.Itoa(index)
-	file, err := os.OpenFile(filePath, os.O_CREATE, os.ModeAppend)
+	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY, os.ModeAppend)
 	check(err, "Could not open new checkpoint file")
 	defer file.Close()
 
@@ -168,7 +168,6 @@ func (s *server) EventLoop() {
 
 	log.Println("Federated Averaging completed")
 
-
 	// or compare with some base number
 	// TODO: change else condition
 	// if s.numUpdates == s.numCheckIns && s.numUpdates > 0 {
@@ -192,7 +191,6 @@ func (s *server) FederatedAveraging() {
 	// 	return
 	// }
 
-	log.Println("Arguments: ", args)
 	// model path
 	cmd := exec.Command("python", argsList...)
 	cmd.Stdout = os.Stdout

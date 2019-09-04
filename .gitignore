@@ -1,4 +1,4 @@
-server/data/
-server/model/
-server/genproto/
-server/device*
+data/
+model/
+device*
+genproto/

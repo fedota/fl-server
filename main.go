@@ -11,7 +11,7 @@ import (
 	"os/exec"
 
 	"google.golang.org/grpc"
-	pb "fl-server/server/genproto/fl_round"
+	pb "federated_learning/fl-server/genproto/fl_round"
 )
 
 // constants

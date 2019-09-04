@@ -11,13 +11,7 @@
 
 1. Start a Test Client to connect to the server
 	```
-	$ cd test-client
+	$ cd fl-misc/test-client
 	$ chmod +x genproto.sh && ./genproto
 	$ go run main.go <Name-of-client>
 	```
-
-### Compile proto
-```
-$ protoc --go_out=plugins=grpc:server/genproto -I pb pb/fl_round.proto
-$ protoc --go_out=plugins=grpc:test-client/genproto -I pb pb/fl_round.proto
-```

@@ -11,7 +11,7 @@ import (
 	"os/exec"
 
 	"google.golang.org/grpc"
-	pb "fl-server/server/genproto"
+	pb "fl-server/server/genproto/fl_round"
 )
 
 // constants
@@ -123,7 +123,7 @@ func (s *server) Update(stream pb.FlRound_UpdateServer) error {
 	// open the file
 	// log.Println(updatedCheckpointPath + strconv.Itoa(index))
 	filePath := updatedCheckpointPath + strconv.Itoa(index)
-	file, err := os.OpenFile(filePath, os.O_CREATE, os.ModeAppend)
+	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY, os.ModeAppend)
 	check(err, "Could not open new checkpoint file")
 	defer file.Close()
 

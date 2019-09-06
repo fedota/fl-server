@@ -49,13 +49,13 @@ type writeOp struct {
 
 // server struct to implement gRPC Round service interface
 type server struct {
-	reads chan readOp
-	writes chan writeOp
-	selected chan bool
-	numCheckIns       int
-	numUpdates        int
-	mu                sync.Mutex
-	checkpointUpdates map[int]flRoundClientResult
+	reads 			chan readOp
+	writes 			chan writeOp
+	selected 		chan bool
+	numCheckIns		int
+	numUpdates		int
+	mu				sync.Mutex
+	checkpointUpdates	map[int]flRoundClientResult
 }
 
 func main() {
@@ -66,11 +66,16 @@ func main() {
 	// register FL round server
 	srv := grpc.NewServer()
 	// impl instance
-	flServer := &server{numCheckIns: 0, checkpointUpdates: make(map[int]flRoundClientResult), reads: make(chan readOp), writes: make(chan writeOp)}
+	flServer := &server{
+		numCheckIns: 0, 
+		checkpointUpdates: make(map[int]flRoundClientResult), 
+		reads: make(chan readOp), 
+		writes: make(chan writeOp),
+		selected: make(chan bool)}
 	pb.RegisterFlRoundServer(srv, flServer)
 
 	// go flServer.EventLoop()
-	go flServer.ConnectionMetrics()
+	go flServer.ConnectionHandler()
 
 	// start serving
 	err = srv.Serve(lis)
@@ -103,7 +108,7 @@ func (s *server) CheckIn(stream pb.FlRound_CheckInServer) error {
 	write := writeOp{
 		varType:  VAR_NUM_CHECKINS,
 		response: make(chan bool)}
-	// send to handler(ConnectionMetrics) via writes channel
+	// send to handler(ConnectionHandler) via writes channel
 	s.writes <- write
 	
 	// wait for response
@@ -113,7 +118,10 @@ func (s *server) CheckIn(stream pb.FlRound_CheckInServer) error {
 	}
 
 	// wait for selection
-	return nil
+	if !(<-s.selected) {
+		log.Println("Not selected")
+		return nil
+	}
 
 	// open file
 	file, err = os.Open(checkpointFilePath)
@@ -159,21 +167,21 @@ func (s *server) Update(stream pb.FlRound_UpdateServer) error {
 	write := writeOp{
 		varType:  VAR_NUM_UPDATES,
 		response: make(chan bool)}
-	// send to handler (ConnectionMetrics) via writes channel
+	// send to handler (ConnectionHandler) via writes channel
 	s.writes <- write
 	
 	// wait for response
-	if !(<- write.response) {
-		log.Println("Update rejected")
-		return nil
-	}
+	// if !(<- write.response) {
+	// 	log.Println("Update rejected")
+	// 	return nil
+	// }
 
 	// create read operation
 	read := readOp{
 		varType:  VAR_NUM_UPDATES,
 		response: make(chan int)}
-	// send to handler (ConnectionMetrics) via reads channel
-		s.reads <- read
+	// send to handler (ConnectionHandler) via reads channel
+	s.reads <- read
 
 	index := <- read.response
 
@@ -258,7 +266,7 @@ func (s *server) FederatedAveraging() {
 
 // Handler for connection reads and updates
 // Takes care of update and checkin limits 
-func (s *server) ConnectionMetrics() {
+func (s *server) ConnectionHandler() {
 	for {
 		select {
 		// read query
@@ -274,17 +282,23 @@ func (s *server) ConnectionMetrics() {
 			switch write.varType {
 			case VAR_NUM_CHECKINS:
 				s.numCheckIns++
-				// if number of checkins exceed the limit, reject 
+				// if number of checkins exceed the limit, reject this one
 				if (s.numCheckIns > checkinLimit) {
 					write.response <- false
+				} else if (s.numCheckIns == checkinLimit) {
+					write.response <- true
+					// send selection success 
+					for i := 0; i < s.numCheckIns; i++ {
+						s.selected <- true
+					}
 				} else {
 					write.response <- true
 				}
 			case VAR_NUM_UPDATES:
 				s.numUpdates++
-				// if enough updates available, reject
+				// if enough updates available, start FA
 				if (s.numUpdates > updateLimit) {
-					write.response <- false
+					// write.response <- false
 					// begin federated averaging process 
 					// go s.FederatedAveraging()
 					log.Println("FA Process")
@@ -292,6 +306,7 @@ func (s *server) ConnectionMetrics() {
 					write.response <- true
 				}
 			}
+			// TODO: After x seconds send false to all checkins and reset numcheckins
 		}
 	}
 }

@@ -17,22 +17,41 @@ import (
 
 // constants
 const (
-	port                  = ":50051"
-	modelFilePath         = "./model/model.h5"
-	checkpointFilePath    = "./data/fl_checkpoint"
-	updatedCheckpointPath = "./data/fl_checkpoint_update_"
-	chunkSize             = 64 * 1024
-	reconnectionTime      = 8000
-	estimatedRoundTime    = 8000
+	port					= ":50051"
+	modelFilePath			= "./model/model.h5"
+	checkpointFilePath		= "./data/fl_checkpoint"
+	updatedCheckpointPath	= "./data/fl_checkpoint_update_"
+	chunkSize				= 64 * 1024
+	reconnectionTime		= 8000
+	estimatedRoundTime		= 8000
+	checkinLimit			= 2
+	updateLimit				= 1 
+	VAR_NUM_CHECKINS		= 0
+	VAR_NUM_UPDATES			= 1
 )
 
+// store the result from a client
 type flRoundClientResult struct {
 	checkpointWeight   int64
 	checkpointFilePath string
 }
 
+// to handle read writes
+type readOp struct {
+	varType int
+	response chan int
+}
+type writeOp struct {
+	varType int
+	val int
+	response chan bool
+}
+
 // server struct to implement gRPC Round service interface
 type server struct {
+	reads chan readOp
+	writes chan writeOp
+	selected chan bool
 	numCheckIns       int
 	numUpdates        int
 	mu                sync.Mutex
@@ -47,15 +66,15 @@ func main() {
 	// register FL round server
 	srv := grpc.NewServer()
 	// impl instance
-	flServer := &server{numCheckIns: 0, checkpointUpdates: make(map[int]flRoundClientResult)}
+	flServer := &server{numCheckIns: 0, checkpointUpdates: make(map[int]flRoundClientResult), reads: make(chan readOp), writes: make(chan writeOp)}
 	pb.RegisterFlRoundServer(srv, flServer)
 
-	go flServer.EventLoop()
+	// go flServer.EventLoop()
+	go flServer.ConnectionMetrics()
 
 	// start serving
 	err = srv.Serve(lis)
-	check(err, "Failed to serve on port"+port)
-
+	check(err, "Failed to serve on port " + port)
 }
 
 // Check In rpc
@@ -73,12 +92,28 @@ func (s *server) CheckIn(stream pb.FlRound_CheckInServer) error {
 	checkinReq, err := stream.Recv()
 	log.Println("Client Name: ", checkinReq.Message)
 
-	// prevent inconsistency
-	// as each rpc is executed as a separate go routine
-	s.mu.Lock()
-	s.numCheckIns++
-	s.mu.Unlock()
-	log.Println("Count: ", s.numCheckIns)
+	// // prevent inconsistency
+	// // as each rpc is executed as a separate go routine
+	// s.mu.Lock()
+	// s.numCheckIns++
+	// s.mu.Unlock()
+	// log.Println("Count: ", s.numCheckIns)
+	
+	// create a write operation
+	write := writeOp{
+		varType:  VAR_NUM_CHECKINS,
+		response: make(chan bool)}
+	// send to handler(ConnectionMetrics) via writes channel
+	s.writes <- write
+	
+	// wait for response
+	if !(<- write.response) {
+		log.Println("CheckIn rejected")
+		return nil
+	}
+
+	// wait for selection
+	return nil
 
 	// open file
 	file, err = os.Open(checkpointFilePath)
@@ -112,13 +147,35 @@ func (s *server) CheckIn(stream pb.FlRound_CheckInServer) error {
 // TODO: delete file when error
 func (s *server) Update(stream pb.FlRound_UpdateServer) error {
 
-	// count number of operation
-	// as each rpc is executed as a separate go routine
-	// TODO: make go routine to handle count updates
-	s.mu.Lock()
-	s.numUpdates++
-	index := s.numUpdates
-	s.mu.Unlock()
+	// // count number of operation
+	// // as each rpc is executed as a separate go routine
+	// // TODO: make go routine to handle count updates
+	// s.mu.Lock()
+	// s.numUpdates++
+	// index := s.numUpdates
+	// s.mu.Unlock()
+
+	// create a write operation
+	write := writeOp{
+		varType:  VAR_NUM_UPDATES,
+		response: make(chan bool)}
+	// send to handler (ConnectionMetrics) via writes channel
+	s.writes <- write
+	
+	// wait for response
+	if !(<- write.response) {
+		log.Println("Update rejected")
+		return nil
+	}
+
+	// create read operation
+	read := readOp{
+		varType:  VAR_NUM_UPDATES,
+		response: make(chan int)}
+	// send to handler (ConnectionMetrics) via reads channel
+		s.reads <- read
+
+	index := <- read.response
 
 	// open the file
 	// log.Println(updatedCheckpointPath + strconv.Itoa(index))
@@ -197,6 +254,46 @@ func (s *server) FederatedAveraging() {
 	cmd.Stderr = os.Stderr
 	err := cmd.Run()
 	check(err, "Unable to run federated averaging")
+}
+
+// Handler for connection reads and updates
+// Takes care of update and checkin limits 
+func (s *server) ConnectionMetrics() {
+	for {
+		select {
+		// read query
+		case read := <- s.reads:
+			switch read.varType {
+			case VAR_NUM_CHECKINS:
+				read.response <- s.numCheckIns
+			case VAR_NUM_UPDATES:
+				read.response <- s.numUpdates
+			}
+		// write query
+		case write := <- s.writes:
+			switch write.varType {
+			case VAR_NUM_CHECKINS:
+				s.numCheckIns++
+				// if number of checkins exceed the limit, reject 
+				if (s.numCheckIns > checkinLimit) {
+					write.response <- false
+				} else {
+					write.response <- true
+				}
+			case VAR_NUM_UPDATES:
+				s.numUpdates++
+				// if enough updates available, reject
+				if (s.numUpdates > updateLimit) {
+					write.response <- false
+					// begin federated averaging process 
+					// go s.FederatedAveraging()
+					log.Println("FA Process")
+				} else {
+					write.response <- true
+				}
+			}
+		}
+	}
 }
 
 // Check for error, log and exit if err

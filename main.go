@@ -15,19 +15,23 @@ import (
 	"google.golang.org/grpc"
 )
 
+var start time.Time
+
 // constants
 const (
-	port					= ":50051"
-	modelFilePath			= "./model/model.h5"
-	checkpointFilePath		= "./data/fl_checkpoint"
-	updatedCheckpointPath	= "./data/fl_checkpoint_update_"
-	chunkSize				= 64 * 1024
-	reconnectionTime		= 8000
-	estimatedRoundTime		= 8000
-	checkinLimit			= 2
-	updateLimit				= 1 
-	VAR_NUM_CHECKINS		= 0
-	VAR_NUM_UPDATES			= 1
+	port = ":50051"
+	modelFilePath = "./model/model.h5"
+	checkpointFilePath = "./data/fl_checkpoint"
+	updatedCheckpointPath = "./data/fl_checkpoint_update_"
+	chunkSize = 64 * 1024
+	postCheckinReconnectionTime	= 8000
+	postUpdateReconnectionTime	= 8000
+	estimatedRoundTime = 8000
+	estimatedWaitingTime = 20000
+	checkinLimit = 2
+	updateLimit = 1
+	VAR_NUM_CHECKINS = 0
+	VAR_NUM_UPDATES = 1
 )
 
 // store the result from a client
@@ -37,6 +41,8 @@ type flRoundClientResult struct {
 }
 
 // to handle read writes
+// Credit: Mark McGranaghan
+// Source: https://gobyexample.com/stateful-goroutines
 type readOp struct {
 	varType int
 	response chan int
@@ -58,20 +64,24 @@ type server struct {
 	checkpointUpdates	map[int]flRoundClientResult
 }
 
+func init() {
+	start = time.Now()
+}
+
 func main() {
 	// listen
 	lis, err := net.Listen("tcp", port)
 	check(err, "Failed to listen on port"+port)
 
-	// register FL round server
 	srv := grpc.NewServer()
-	// impl instance
+	// server impl instance
 	flServer := &server{
 		numCheckIns: 0, 
 		checkpointUpdates: make(map[int]flRoundClientResult), 
 		reads: make(chan readOp), 
 		writes: make(chan writeOp),
 		selected: make(chan bool)}
+	// register FL round server
 	pb.RegisterFlRoundServer(srv, flServer)
 
 	// go flServer.EventLoop()
@@ -95,15 +105,8 @@ func (s *server) CheckIn(stream pb.FlRound_CheckInServer) error {
 
 	// receive check-in request
 	checkinReq, err := stream.Recv()
-	log.Println("Client Name: ", checkinReq.Message)
+	log.Println("CheckIn Request: Client Name: ", checkinReq.Message, "Time:", time.Since(start))
 
-	// // prevent inconsistency
-	// // as each rpc is executed as a separate go routine
-	// s.mu.Lock()
-	// s.numCheckIns++
-	// s.mu.Unlock()
-	// log.Println("Count: ", s.numCheckIns)
-	
 	// create a write operation
 	write := writeOp{
 		varType:  VAR_NUM_CHECKINS,
@@ -114,18 +117,28 @@ func (s *server) CheckIn(stream pb.FlRound_CheckInServer) error {
 	// wait for response
 	if !(<- write.response) {
 		log.Println("CheckIn rejected")
+		err := stream.Send(&pb.FlData{
+			IntVal: postCheckinReconnectionTime,
+			Type: pb.Type_FL_RECONN_TIME,
+		})
+		check(err, "Unable to send post checkin reconnection time")
 		return nil
 	}
 
 	// wait for selection
 	if !(<-s.selected) {
 		log.Println("Not selected")
+		err := stream.Send(&pb.FlData{
+			IntVal: postCheckinReconnectionTime,
+			Type: pb.Type_FL_RECONN_TIME,
+		})
+		check(err, "Unable to send post checkin reconnection time")
 		return nil
 	}
 
 	// open file
 	file, err = os.Open(checkpointFilePath)
-	check(err, "Could not open checkpoint file")
+	check(err, "Unable to open checkpoint file")
 	defer file.Close()
 
 	// make a buffer of a defined chunk size
@@ -137,7 +150,7 @@ func (s *server) CheckIn(stream pb.FlRound_CheckInServer) error {
 		if err == io.EOF {
 			return nil
 		}
-		check(err, "Could not read file content")
+		check(err, "Unable to read checkpoint file")
 
 		// send the FL checkpoint Data (file chunk + type: FL checkpoint)
 		err = stream.Send(&pb.FlData{
@@ -146,22 +159,17 @@ func (s *server) CheckIn(stream pb.FlRound_CheckInServer) error {
 			},
 			Type: pb.Type_FL_CHECKPOINT,
 		})
+		check(err, "Unable to send checkpoint data")
 	}
 
 }
 
 // Update rpc
 // Accumulate FL checkpoint update sent by client
-// TODO: delete file when error
+// TODO: delete file when error and after round completes
 func (s *server) Update(stream pb.FlRound_UpdateServer) error {
 
-	// // count number of operation
-	// // as each rpc is executed as a separate go routine
-	// // TODO: make go routine to handle count updates
-	// s.mu.Lock()
-	// s.numUpdates++
-	// index := s.numUpdates
-	// s.mu.Unlock()
+	log.Println("Update Request: Time:", time.Since(start))
 
 	// create a write operation
 	write := writeOp{
@@ -170,35 +178,40 @@ func (s *server) Update(stream pb.FlRound_UpdateServer) error {
 	// send to handler (ConnectionHandler) via writes channel
 	s.writes <- write
 	
-	// wait for response
-	// if !(<- write.response) {
-	// 	log.Println("Update rejected")
-	// 	return nil
-	// }
-
+	// IMPORTANT
+	// after sending write request, we wait for response as handler is sending true and gets blocked
+	// if this read is not present -> handler and all subsequent rpc calls are in deadlock
+	if !(<- write.response) {
+		log.Println("Update Request Accepted: Time:", time.Since(start))
+	}
+	
 	// create read operation
 	read := readOp{
 		varType:  VAR_NUM_UPDATES,
 		response: make(chan int)}
 	// send to handler (ConnectionHandler) via reads channel
+	// log.Println("Read Request: Time:", time.Since(start))
 	s.reads <- read
 
+	
+	// log.Println("Waiting Read Response: Time:", time.Since(start))
+	// get index to differentiate clients
 	index := <- read.response
 
 	// open the file
 	// log.Println(updatedCheckpointPath + strconv.Itoa(index))
 	filePath := updatedCheckpointPath + strconv.Itoa(index)
 	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY, os.ModeAppend)
-	check(err, "Could not open new checkpoint file")
+	check(err, "Unable to open new checkpoint file")
 	defer file.Close()
 
 	for {
 		// receive Fl data
 		flData, err := stream.Recv()
-		// exit after data transfer completee
+		// exit after data transfer completes
 		if err == io.EOF {
 			return stream.SendAndClose(&pb.FlData{
-				IntVal: reconnectionTime,
+				IntVal: postUpdateReconnectionTime,
 				Type:   pb.Type_FL_RECONN_TIME,
 			})
 		}
@@ -216,31 +229,10 @@ func (s *server) Update(stream pb.FlRound_UpdateServer) error {
 				checkpointWeight:   flData.IntVal,
 				checkpointFilePath: filePath,
 			}
-			s.mu.Unlock()
 			log.Println("Checkpoint Update: ", s.checkpointUpdates[index])
+			s.mu.Unlock()
 		}
 	}
-}
-
-func (s *server) EventLoop() {
-	// TODO: change this naive way
-	// Wait for an estimated time for round
-	log.Println("Event Loop in sleep")
-	time.Sleep(estimatedRoundTime * time.Millisecond)
-	log.Println("Event loop out of sleep")
-
-	s.FederatedAveraging()
-
-	log.Println("Federated Averaging completed")
-
-	// or compare with some base number
-	// TODO: change else condition
-	// if s.numUpdates == s.numCheckIns && s.numUpdates > 0 {
-	// 	// assumed no more updates and check-ins
-	// 	s.FederatedAveraging()
-	// } else {
-	// 	log.Fatalf("Could not complete round")
-	// }
 }
 
 // Runs federated averaging
@@ -266,11 +258,14 @@ func (s *server) FederatedAveraging() {
 
 // Handler for connection reads and updates
 // Takes care of update and checkin limits 
+// Credit: Mark McGranaghan
+// Source: https://gobyexample.com/stateful-goroutines
 func (s *server) ConnectionHandler() {
 	for {
 		select {
 		// read query
 		case read := <- s.reads:
+			log.Println("Handler ==> Read Query:", read.varType, "Time:", time.Since(start))
 			switch read.varType {
 			case VAR_NUM_CHECKINS:
 				read.response <- s.numCheckIns
@@ -279,34 +274,55 @@ func (s *server) ConnectionHandler() {
 			}
 		// write query
 		case write := <- s.writes:
+			log.Println("Handler ==> Write Query:", write.varType, "Time:", time.Since(start))
 			switch write.varType {
 			case VAR_NUM_CHECKINS:
 				s.numCheckIns++
+				log.Println("Handler ==> numCheckIns", s.numCheckIns, "Time:", time.Since(start))
 				// if number of checkins exceed the limit, reject this one
 				if (s.numCheckIns > checkinLimit) {
+					log.Println("Handler ==> Excess checkins", "Time:", time.Since(start))
 					write.response <- false
 				} else if (s.numCheckIns == checkinLimit) {
+					log.Println("Handler ==> accepted", time.Since(start))
 					write.response <- true
-					// send selection success 
+					// send selection success
+					log.Println("Handler ==> Limit reached, selecting now", "Time:", time.Since(start))
 					for i := 0; i < s.numCheckIns; i++ {
 						s.selected <- true
 					}
 				} else {
+					log.Println("Handler ==> accepted", "Time:", time.Since(start))
 					write.response <- true
 				}
 			case VAR_NUM_UPDATES:
 				s.numUpdates++
+				log.Println("Handler ==> numUpdates", s.numUpdates, "Time:", time.Since(start))
+				log.Println("Handler ==> accepted update", "Time:", time.Since(start))
+				write.response <- true
+
 				// if enough updates available, start FA
 				if (s.numUpdates > updateLimit) {
-					// write.response <- false
 					// begin federated averaging process 
 					// go s.FederatedAveraging()
-					log.Println("FA Process")
-				} else {
-					write.response <- true
+					log.Println("Begin FA Process")
 				}
 			}
-			// TODO: After x seconds send false to all checkins and reset numcheckins
+		// After wait period check if everything is fine
+		case <- time.After(estimatedWaitingTime * time.Second):
+			log.Println("Timeout")
+			// if checkin limit is not reached
+			// abandon round
+			if (s.numCheckIns < checkinLimit) {
+				log.Println("Round Abandoned!")
+				// reject all devices
+				for i := 0; i < s.numCheckIns; i++ {
+					s.selected <- false
+				}
+				// reset
+				s.numCheckIns = 0;
+			}
+			// TODO: Decide about updates not received in time
 		}
 	}
 }
@@ -314,6 +330,6 @@ func (s *server) ConnectionHandler() {
 // Check for error, log and exit if err
 func check(err error, errorMsg string) {
 	if err != nil {
-		log.Fatalf(errorMsg+" ==> ", err)
+		log.Fatalf(errorMsg, " ==> ", err)
 	}
 }

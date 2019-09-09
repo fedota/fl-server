@@ -2,3 +2,5 @@ data/
 model/
 device*
 genproto/
+checkpoint/
+weight_updates/

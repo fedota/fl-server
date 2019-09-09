@@ -20,9 +20,9 @@ var start time.Time
 // constants
 const (
 	port                        = ":50051"
-	modelFilePath               = "./model/model.h5"
-	checkpointFilePath          = "./checkpoint/fl_checkpoint"
-	weightUpdatesDir            = "./weight_updates/"
+	modelFilePath               = "./server/model/model.h5"
+	checkpointFilePath          = "./server/checkpoint/fl_checkpoint"
+	weightUpdatesDir            = "./server/weight_updates/"
 	chunkSize                   = 64 * 1024
 	postCheckinReconnectionTime = 8000
 	postUpdateReconnectionTime  = 8000

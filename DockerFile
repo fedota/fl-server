@@ -1,9 +1,14 @@
 FROM golang
 
-ENV PROJECT fl-server/server
+# Install dependencies
+RUN apt-get update && \
+	apt-get install -y python3-dev python3-pip
+RUN pip3 install --upgrade numpy tensorflow keras
+
+ENV PROJECT fl-server
 ADD . /go/src/$PROJECT
 RUN go install $PROJECT
 
-ENTRYPOINT /go/bin/server
+ENTRYPOINT /go/bin/fl-server
 
 EXPOSE 50051

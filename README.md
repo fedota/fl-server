@@ -19,13 +19,8 @@
 	```
 	cd fl-server
 	chmod +x genproto.sh && ./genproto
-	docker build -t fl-server
-	docker run -d -p 50051:50051 --name fl-server -v <LOCAL_PATH_TO_SERVER_FOLDER>:server
-	```
-
-	Eg. If `server` directory is inside `fl-server`
-	```
-	docker run -d -p 50051:50051 --name fl-server -v server:server
+	docker build -t fl-server .
+	docker run -d -p 50051:50051 fl-server
 	```
 
 2. Start a Test Client to connect to the server

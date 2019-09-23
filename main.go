@@ -20,9 +20,9 @@ var start time.Time
 // constants
 const (
 	port                        = ":50051"
-	modelFilePath               = "./server/model/model.h5"
-	checkpointFilePath          = "./server/checkpoint/fl_checkpoint"
-	weightUpdatesDir            = "./server/weight_updates/"
+	modelFilePath               = "./data/model/model.h5"
+	checkpointFilePath          = "./data/checkpoint/fl_checkpoint"
+	weightUpdatesDir            = "./data/weight_updates/"
 	chunkSize                   = 64 * 1024
 	postCheckinReconnectionTime = 8000
 	postUpdateReconnectionTime  = 8000
@@ -280,7 +280,7 @@ func (s *server) FederatedAveraging() {
 	// }
 
 	// model path
-	cmd := exec.Command("python", argsList...)
+	cmd := exec.Command("python3", argsList...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	err := cmd.Run()
